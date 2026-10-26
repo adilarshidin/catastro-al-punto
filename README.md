@@ -2,20 +2,22 @@
 
 Localiza el inmueble exacto (piso, escalera, puerta) en el Catastro a partir de lo que te dice el cliente, y abre su ficha en la Sede Electrónica del Catastro.
 
-## Qué acepta el buscador
+## Cómo se usa
 
-- Dirección con piso: `Calle Mayor 12, 3ºB, Cartagena`, `C/ Real 5 bajo 2, Murcia`, `esc 2, planta 4 puerta C`
-- Coordenadas: `37.6052, -0.9864` (en Google Maps: mantén pulsado el edificio y copia las coordenadas)
-- Enlace largo de Google Maps (el que lleva `@lat,lng` o `!3d…!4d…`)
-- Referencia catastral de 14 o 20 caracteres
+Pensado para el personal de la agencia, sin conocimientos técnicos: cada dato va en su propia casilla.
 
-Los enlaces cortos `maps.app.goo.gl` no llevan coordenadas y no se pueden leer.
+1. **¿Dónde está la vivienda?** Hay dos formas:
+   - **Escribir la dirección**: calle, número y municipio por separado. Al escribir la calle aparecen sugerencias de portales reales (CartoCiudad, IGN); al elegir una se rellenan número y municipio.
+   - **Pegar enlace de Google Maps**: vale el enlace corto que da el botón Compartir (`maps.app.goo.gl/…`), un enlace largo o unas coordenadas (`37.6052, -0.9864`).
+   - El enlace «Ya tengo la referencia catastral» permite buscar por referencia de 14 o 20 caracteres.
+2. **¿Qué piso es?** Escalera, planta y puerta (opcionales). Se entiende «3º», «Bajo», «Ático», «izquierda», etc.
+3. **Buscar la vivienda.** El piso que coincide sale en verde con su dirección completa (calle, número, escalera, planta, puerta, código postal y municipio) y su referencia catastral, con botones para copiar cada una.
 
-Mientras escribes una dirección aparecen sugerencias de calles y portales reales (CartoCiudad, IGN). Si eliges un portal, se busca directamente con su punto exacto y su referencia catastral, sin pasar por Nominatim. La planta y la puerta que hayas escrito se conservan. Si eliges una calle sin número, queda escrita para que añadas el número.
+Si una dirección existe en varios sitios (por ejemplo, la misma calle en dos pedanías), la herramienta pregunta cuál es.
 
 ## Cómo funciona
 
-1. La dirección se geolocaliza con OpenStreetMap (Nominatim).
+1. La dirección se sitúa con CartoCiudad (portal oficial y su referencia catastral) y, si no lo encuentra, con OpenStreetMap (Nominatim). Los enlaces cortos de Google Maps los abre el servidor para sacar las coordenadas.
 2. Con esas coordenadas se consulta el servicio oficial del Catastro (`Consulta_RCCOOR`) para saber qué parcela hay en ese punto, y también las parcelas a menos de 50 m por si el punto cae en el edificio de al lado.
 3. Se piden todos los inmuebles de la parcela (`Consulta_DNPRC`) y se marca el que coincide con la planta, puerta y escalera del cliente.
 4. Los botones abren la Sede Electrónica (visor y ficha) en ese inmueble para la comprobación final.
@@ -26,11 +28,11 @@ Toca cualquier edificio del mapa o arrastra el pin para corregir el punto.
 
 1. Sube esta carpeta a un repositorio de GitHub (o usa `vercel` desde la terminal dentro de la carpeta).
 2. Importa el proyecto en Vercel. No hay que configurar nada: `index.html` es la página y `api/catastro.js` es la función que habla con el Catastro.
-3. Abre la URL que te da Vercel. En el panel "Marcador para Google Maps" tienes el marcador ya apuntando a tu dominio.
+3. Abre la URL que te da Vercel.
 
 ## Por qué hay un proxy
 
-El navegador no puede llamar directamente a los servicios del Catastro desde otro dominio. `api/catastro.js` solo reenvía cinco consultas concretas, valida los parámetros y cachea las respuestas 24 h.
+El navegador no puede llamar directamente a los servicios del Catastro desde otro dominio. `api/catastro.js` solo reenvía cinco consultas concretas, valida los parámetros y cachea las respuestas 24 h. También abre los enlaces cortos de Google Maps (solo sigue sus redirecciones, sin descargar páginas).
 
 ## Limitaciones conocidas
 

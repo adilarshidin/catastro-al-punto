@@ -51,8 +51,42 @@ const OPS = {
   },
 };
 
+// Enlace corto de Google Maps (maps.app.goo.gl) -> enlace largo, que sí lleva coordenadas o el nombre del lugar.
+// Solo sigue redirecciones de los acortadores; nunca descarga otras páginas.
+const SHORT_HOSTS = new Set(["maps.app.goo.gl", "goo.gl"]);
+const isShort = (u) => u.protocol === "https:" && SHORT_HOSTS.has(u.hostname) && (u.hostname !== "goo.gl" || u.pathname.startsWith("/maps"));
+async function expandMapsLink(raw) {
+  let u;
+  try { u = new URL(String(raw ?? "")); } catch { throw new Error("Enlace no válido"); }
+  if (!isShort(u)) throw new Error("Solo se aceptan enlaces cortos de Google Maps");
+  for (let i = 0; i < 5 && isShort(u); i++) {
+    const r = await fetch(u, {
+      redirect: "manual",
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; CatastroAlPunto/1.0)" },
+      signal: AbortSignal.timeout(8000),
+    });
+    const loc = r.headers.get("location");
+    if (r.status < 300 || r.status > 399 || !loc) throw new Error("El enlace de Google Maps no existe o ha caducado");
+    u = new URL(loc, u);
+    // Fuera de la UE no pasa, pero por si Google pide antes el consentimiento de cookies.
+    if (u.hostname === "consent.google.com" && u.searchParams.get("continue")) u = new URL(u.searchParams.get("continue"));
+  }
+  if (isShort(u)) throw new Error("El enlace de Google Maps da demasiadas vueltas");
+  return u.href;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  if (req.query.op === "maps") {
+    try {
+      const url = await expandMapsLink(req.query.url);
+      res.setHeader("Cache-Control", "public, s-maxage=86400");
+      return res.status(200).json({ url });
+    } catch (e) {
+      const ours = !["TimeoutError", "TypeError", "AbortError"].includes(e.name);
+      return res.status(ours ? 400 : 504).json({ error: ours ? e.message : "No se pudo abrir el enlace de Google Maps" });
+    }
+  }
   const op = OPS[req.query.op];
   if (!op) return res.status(400).json({ error: "Operación no permitida" });
 
