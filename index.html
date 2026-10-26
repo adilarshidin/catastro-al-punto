@@ -358,6 +358,13 @@ map.on("click", (e) => lookupPoint(e.latlng.lat, e.latlng.lng, { keepHint:true }
 let state = { hint:{ es:"", pt:"", pu:"" }, clientAddr:"", units:[], rc14:"", busy:false, ll:null };
 function setHint(h){ state.hint = h; els.fes.value = h.es || ""; els.fpt.value = h.pt === "0" ? "Bajo" : (h.pt || ""); els.fpu.value = h.pu || ""; }
 function busy(b){ state.busy = b; els.go.disabled = b; els.go.textContent = b ? "Buscando…" : "Buscar"; }
+// Borra el resultado anterior para que una búsqueda fallida no deje a la vista la parcela de la previa.
+function resetResult(){
+  els.parcel.hidden = true; hideCands();
+  els.compare.hidden = true; els.cmpClient.textContent = ""; els.cmpCat.textContent = "";
+  state.units = []; state.rc14 = "";
+  if (parcelPoly){ map.removeLayer(parcelPoly); parcelPoly = null; }
+}
 
 /* ---------- flujo principal ---------- */
 els.form.addEventListener("submit", (e) => { e.preventDefault(); run(els.q.value); });
@@ -471,6 +478,7 @@ async function run(raw, pre = null){
     return;
   }
   busy(true);
+  resetResult();
   try {
     if (p.type === "rc"){
       setHint({ es:"", pt:"", pu:"" }); state.clientAddr = "";
@@ -518,7 +526,7 @@ async function lookupRC(rc){
 
 async function lookupPoint(lat, lng, opts = {}){
   const own = !opts.internal;
-  if (own){ if (state.busy) return; busy(true); }
+  if (own){ if (state.busy) return; busy(true); resetResult(); }
   placeMarker(lat, lng); state.ll = { lat, lng };
   status("load", "Consultando qué parcela hay en ese punto…");
   try {
