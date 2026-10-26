@@ -51,6 +51,12 @@ button,input{font:inherit;color:inherit}
 .field input{width:100%;height:48px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:0 40px 0 14px;font-size:16px}
 .field input::placeholder{color:var(--muted)}
 .clear{position:absolute;right:6px;top:8px;width:32px;height:32px;border:0;background:none;color:var(--muted);border-radius:8px;cursor:pointer;font-size:18px}
+.sugg{position:absolute;z-index:1100;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);max-height:min(360px,55vh);overflow-y:auto}
+.sugg li{display:grid;grid-template-columns:1fr auto;gap:0 10px;align-items:center;padding:8px 10px;border-radius:7px;cursor:pointer}
+.sugg li[aria-selected="true"],.sugg li:hover{background:var(--sunk)}
+.sugg .s-main{font-weight:600;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sugg .s-sub{grid-column:1;font-size:12px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sugg .s-tag{grid-column:2;grid-row:1/3;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .btn{height:48px;border:0;border-radius:var(--r);padding:0 18px;font-weight:700;cursor:pointer;background:var(--ink);color:var(--ink-fg);white-space:nowrap}
 .btn:disabled{opacity:.55;cursor:wait}
 .hint{margin:8px 0 0;color:var(--muted);font-size:12.5px}
@@ -150,8 +156,9 @@ pre.code{margin:0;padding:10px;background:var(--sunk);border-radius:8px;font:11.
     <form class="search" id="form" autocomplete="off">
       <div class="field">
         <input id="q" type="text" inputmode="search" enterkeyhint="search" aria-label="Dirección, coordenadas, enlace de Google Maps o referencia catastral"
-          placeholder="Calle Mayor 12, 3ºB, Cartagena">
+          placeholder="Calle Mayor 12, 3ºB, Cartagena" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="sugg">
         <button type="button" class="clear" id="clear" aria-label="Borrar" hidden>×</button>
+        <ul class="sugg" id="sugg" role="listbox" aria-label="Direcciones sugeridas" hidden></ul>
       </div>
       <button class="btn" id="go" type="submit">Buscar</button>
     </form>
@@ -355,9 +362,107 @@ function busy(b){ state.busy = b; els.go.disabled = b; els.go.textContent = b ? 
 /* ---------- flujo principal ---------- */
 els.form.addEventListener("submit", (e) => { e.preventDefault(); run(els.q.value); });
 els.q.addEventListener("input", () => els.clear.hidden = !els.q.value);
-els.clear.onclick = () => { els.q.value = ""; els.clear.hidden = true; els.q.focus(); };
+els.clear.onclick = () => { els.q.value = ""; els.clear.hidden = true; closeSugg(); els.q.focus(); };
 
-async function run(raw){
+/* ---------- autocompletado (CartoCiudad, IGN) ---------- */
+// Nominatim prohíbe el autocompletado; CartoCiudad es el geocodificador oficial y da el portal exacto y su referencia catastral.
+const CARTO = "https://www.cartociudad.es/geocoder/api/geocoder/";
+const SUGG_TYPES = new Set(["portal", "callejero", "carretera"]);
+const sugg = { list:[], hint:null, active:-1, seq:0, timer:0, cache:new Map() };
+els.sugg = $("sugg");
+
+els.q.addEventListener("input", () => { clearTimeout(sugg.timer); sugg.timer = setTimeout(suggest, 250); });
+els.q.addEventListener("blur", () => setTimeout(closeSugg, 150));
+els.q.addEventListener("keydown", (e) => {
+  if (els.sugg.hidden) return;
+  const n = sugg.list.length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp"){
+    e.preventDefault();
+    // recorre -1 (el texto escrito) .. n-1 en bucle
+    setActive((sugg.active + 1 + (e.key === "ArrowDown" ? 1 : n)) % (n + 1) - 1);
+  } else if (e.key === "Enter" && sugg.active >= 0){ e.preventDefault(); pickSugg(sugg.active); }
+  else if (e.key === "Escape"){ e.preventDefault(); closeSugg(); }
+});
+els.sugg.addEventListener("mousedown", (e) => e.preventDefault()); // que el input no pierda el foco
+els.sugg.addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) pickSugg(+li.dataset.i); });
+
+async function suggest(){
+  const s = els.q.value, p = parseInput(s);
+  if (p.type !== "addr" || p.query.length < 3 || state.busy) return closeSugg();
+  const id = ++sugg.seq;
+  let list = sugg.cache.get(p.query);
+  if (!list){
+    try {
+      const r = await fetch(CARTO + "candidates?" + new URLSearchParams({ q:p.query, limit:"10" }));
+      list = (await r.json()).filter(c => SUGG_TYPES.has(c.type)).slice(0, 8);
+      sugg.cache.set(p.query, list);
+    } catch { list = []; }
+  }
+  if (id !== sugg.seq || els.q.value !== s || document.activeElement !== els.q) return;
+  openSugg(list, p.hint);
+}
+// "CALLE MAYOR 12, Canteras (Cartagena)" -> calle, población, municipio
+function splitCarto(c){
+  const m = String(c.address || "").match(/^(.*?)(?:, (.+?))?(?: \((.+)\))?$/) || [];
+  const street = m[1] || c.address || "", pob = m[2] || "", mun = m[3] || (pob ? "" : c.muni || "");
+  return { street, place: pob && mun ? `${pob} (${mun})` : pob || mun };
+}
+function openSugg(list, hint){
+  sugg.list = list; sugg.hint = hint; sugg.active = -1;
+  if (!list.length) return closeSugg();
+  els.sugg.innerHTML = list.map((c, i) => {
+    const { street, place } = splitCarto(c);
+    const sub = [place, c.province !== c.muni && c.province, c.postalCode].filter(Boolean).join(" · ");
+    const tag = c.type === "portal" ? "Portal" : c.type === "carretera" ? "Ctra." : "Vía";
+    return `<li role="option" id="sugg-${i}" data-i="${i}" aria-selected="false"><span class="s-main">${esc(street)}</span><span class="s-tag">${tag}</span><span class="s-sub">${esc(sub)}</span></li>`;
+  }).join("");
+  els.sugg.hidden = false; els.q.setAttribute("aria-expanded", "true");
+}
+function closeSugg(){
+  sugg.seq++; sugg.active = -1;
+  els.sugg.hidden = true; els.sugg.innerHTML = "";
+  els.q.setAttribute("aria-expanded", "false"); els.q.removeAttribute("aria-activedescendant");
+}
+function setActive(i){
+  sugg.active = i >= sugg.list.length ? -1 : i;
+  els.sugg.querySelectorAll("li").forEach((li, j) => li.setAttribute("aria-selected", j === sugg.active));
+  if (sugg.active < 0) return els.q.removeAttribute("aria-activedescendant");
+  els.q.setAttribute("aria-activedescendant", "sugg-" + sugg.active);
+  $("sugg-" + sugg.active).scrollIntoView({ block:"nearest" });
+}
+// Vuelve a escribir planta/puerta en un formato que splitAddress entiende.
+function hintToText(h){
+  const pt = { "0":"bajo", AT:"ático", EN:"entresuelo" }[h.pt] || (h.pt && "planta " + h.pt);
+  return [h.es && "esc " + h.es, pt, h.pu && "puerta " + h.pu].filter(Boolean).join(", ");
+}
+async function pickSugg(i){
+  const c = sugg.list[i], hint = sugg.hint || { es:"", pt:"", pu:"" };
+  if (!c) return;
+  closeSugg();
+  const { street, place } = splitCarto(c);
+  const extra = hintToText(hint);
+  if (c.type !== "portal"){
+    // Calle sin número: la dejamos escrita y el cursor listo para añadir el número.
+    const head = street + " ";
+    els.q.value = head + (place ? ", " + place : "") + (extra ? ", " + extra : "");
+    els.q.setSelectionRange(head.length, head.length);
+    els.clear.hidden = false;
+    return;
+  }
+  let lat = +c.lat, lng = +c.lng;
+  if (!lat || !lng){
+    try {
+      const f = await (await fetch(CARTO + "find?" + new URLSearchParams({ id:c.id, type:c.type }))).json();
+      lat = +f.lat; lng = +f.lng;
+    } catch {}
+  }
+  els.q.value = c.address + (extra ? ", " + extra : "");
+  els.clear.hidden = false;
+  run(els.q.value, lat && lng ? { lat, lng, rc: c.refCatastral || "", hint } : null);
+}
+
+async function run(raw, pre = null){
+  closeSugg();
   if (!raw.trim() || state.busy) return;
   const p = parseInput(raw);
   els.empty.hidden = true;
@@ -375,8 +480,9 @@ async function run(raw){
       setHint({ es:"", pt:"", pu:"" }); state.clientAddr = "";
       await lookupPoint(p.lat, p.lng, { keepHint:true, internal:true });
     } else {
-      setHint(p.hint); state.clientAddr = p.raw;
-      await lookupAddress(p);
+      setHint(pre?.hint || p.hint); state.clientAddr = p.raw;
+      if (pre) await lookupPoint(pre.lat, pre.lng, { keepHint:true, internal:true, rc:pre.rc });
+      else await lookupAddress(p);
     }
     remember(raw);
   } catch (e){
@@ -425,6 +531,9 @@ async function lookupPoint(lat, lng, opts = {}){
 
     const cands = await nearby(lat, lng);
     if (!found && !cands.length) throw new CatError("No hay ninguna parcela catastral en ese punto ni a 50 m. Toca el edificio en el mapa.");
+    // Si la sugerencia trae la referencia del portal, manda sobre el punto (que puede caer en la acera).
+    const fromRc = opts.rc && opts.rc.length === 14 && { rc14:opts.rc, ldt:(found?.rc14 === opts.rc ? found.ldt : cands.find(c => c.rc14 === opts.rc)?.ldt) || "" };
+    if (fromRc) found = fromRc;
     const chosen = found || cands[0];
     renderCands(cands, chosen.rc14);
     await loadParcel(chosen.rc14, chosen.ldt, "", { approx: opts.approx || !found });

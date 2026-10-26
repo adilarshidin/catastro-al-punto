@@ -11,6 +11,8 @@ Localiza el inmueble exacto (piso, escalera, puerta) en el Catastro a partir de 
 
 Los enlaces cortos `maps.app.goo.gl` no llevan coordenadas y no se pueden leer.
 
+Mientras escribes una dirección aparecen sugerencias de calles y portales reales (CartoCiudad, IGN). Si eliges un portal, se busca directamente con su punto exacto y su referencia catastral, sin pasar por Nominatim. La planta y la puerta que hayas escrito se conservan. Si eliges una calle sin número, queda escrita para que añadas el número.
+
 ## Cómo funciona
 
 1. La dirección se geolocaliza con OpenStreetMap (Nominatim).
