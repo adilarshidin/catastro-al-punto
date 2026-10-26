@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Catastro al Punto</title>
+<meta name="description" content="Encuentra la referencia catastral exacta de un piso a partir de una dirección, unas coordenadas o un enlace de Google Maps, y ábrelo en la Sede del Catastro.">
+<meta name="theme-color" content="#f3f5f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f141b" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Plano catastral: papel azulado frío, tinta azul para acciones, magenta catastral para la parcela.
+   Móvil: buscador arriba, mapa, hoja de resultados. Escritorio: panel 440px + mapa a sangre. */
+:root{
+  --bg:#f3f5f8; --surface:#ffffff; --sunk:#e8ecf2; --line:#d3dae4; --fg:#16202c; --muted:#5b6878;
+  --ink:#1d4ed8; --ink-fg:#ffffff; --parcel:#c2187a; --parcel-soft:#c2187a1f;
+  --ok:#0f7a4a; --ok-soft:#0f7a4a1a; --warn:#a15c00; --warn-soft:#a15c001a; --bad:#b42318; --bad-soft:#b423181a;
+  --f-ui:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif; --f-code:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px; --shadow:0 1px 2px #0f172a14,0 8px 24px #0f172a12;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f141b; --surface:#161d27; --sunk:#1c2532; --line:#2a3646; --fg:#e6ebf2; --muted:#93a1b3;
+  --ink:#6b9bff; --ink-fg:#0b1220; --parcel:#ff5cb1; --parcel-soft:#ff5cb126;
+  --ok:#3ccf8a; --ok-soft:#3ccf8a1f; --warn:#f0a73a; --warn-soft:#f0a73a1f; --bad:#ff7a6b; --bad-soft:#ff7a6b1f;
+  --shadow:0 1px 2px #0006,0 8px 24px #0005; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f141b; --surface:#161d27; --sunk:#1c2532; --line:#2a3646; --fg:#e6ebf2; --muted:#93a1b3;
+  --ink:#6b9bff; --ink-fg:#0b1220; --parcel:#ff5cb1; --parcel-soft:#ff5cb126;
+  --ok:#3ccf8a; --ok-soft:#3ccf8a1f; --warn:#f0a73a; --warn-soft:#f0a73a1f; --bad:#ff7a6b; --bad-soft:#ff7a6b1f;
+  --shadow:0 1px 2px #0006,0 8px 24px #0005; color-scheme:dark}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.mono{font-family:var(--f-code);font-variant-numeric:tabular-nums}
+
+.app{display:grid;grid-template-rows:auto auto 1fr;min-height:100%}
+.top{position:sticky;top:0;z-index:1000;background:var(--bg);border-bottom:1px solid var(--line);
+  padding:calc(10px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px))}
+.brand{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.brand h1{margin:0;font-size:19px;font-weight:800;font-stretch:80%;letter-spacing:.01em;text-transform:uppercase}
+.brand h1 b{color:var(--parcel)}
+.brand span{color:var(--muted);font-size:12.5px}
+.search{display:flex;gap:8px}
+.field{flex:1;min-width:0;position:relative}
+.field input{width:100%;height:48px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r);padding:0 40px 0 14px;font-size:16px}
+.field input::placeholder{color:var(--muted)}
+.clear{position:absolute;right:6px;top:8px;width:32px;height:32px;border:0;background:none;color:var(--muted);border-radius:8px;cursor:pointer;font-size:18px}
+.btn{height:48px;border:0;border-radius:var(--r);padding:0 18px;font-weight:700;cursor:pointer;background:var(--ink);color:var(--ink-fg);white-space:nowrap}
+.btn:disabled{opacity:.55;cursor:wait}
+.hint{margin:8px 0 0;color:var(--muted);font-size:12.5px}
+.hint code{font-family:var(--f-code);font-size:11.5px;background:var(--sunk);padding:1px 5px;border-radius:5px}
+
+.map-wrap{position:relative;height:44vh;min-height:260px;border-bottom:1px solid var(--line)}
+#map{position:absolute;inset:0;background:var(--sunk)}
+.layers{position:absolute;z-index:500;right:max(10px,env(safe-area-inset-right,0px));top:10px;display:flex;flex-direction:column;gap:6px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 11px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:var(--shadow)}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.map-tip{position:absolute;z-index:500;left:max(10px,env(safe-area-inset-left,0px));bottom:10px;max-width:calc(100% - 20px);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--muted);box-shadow:var(--shadow)}
+
+.panel{padding-block:16px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px;min-width:0}
+
+.status{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:var(--r);background:var(--sunk);font-size:14px}
+.status[data-kind="ok"]{background:var(--ok-soft)} .status[data-kind="warn"]{background:var(--warn-soft)} .status[data-kind="bad"]{background:var(--bad-soft)}
+.status .dot{flex:none;width:9px;height:9px;border-radius:50%;margin-top:6px;background:var(--muted)}
+.status[data-kind="ok"] .dot{background:var(--ok)} .status[data-kind="warn"] .dot{background:var(--warn)} .status[data-kind="bad"] .dot{background:var(--bad)}
+.status[data-kind="load"] .dot{background:var(--ink);animation:pulse 1s infinite ease-in-out}
+@keyframes pulse{50%{opacity:.25}}
+
+.label{font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;min-width:0}
+
+.parcel-head{display:flex;flex-direction:column;gap:6px}
+.rc-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rc{font-family:var(--f-code);font-size:18px;font-weight:600;letter-spacing:.04em;color:var(--parcel);word-break:break-all}
+.addr{font-size:14.5px}
+.compare{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.compare dt{color:var(--muted)} .compare dd{margin:0;min-width:0}
+
+.links{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.link{display:inline-flex;align-items:center;gap:6px;height:38px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--fg);text-decoration:none;font-weight:600;font-size:13.5px;cursor:pointer}
+.link.primary{background:var(--ink);color:var(--ink-fg);border-color:var(--ink)}
+.link svg{width:15px;height:15px}
+.copy{border:1px solid var(--line);background:var(--sunk);border-radius:7px;padding:3px 8px;font-size:12px;font-weight:600;cursor:pointer}
+
+.cands{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
+.cand{flex:none;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:8px 10px;cursor:pointer;max-width:240px}
+.cand[aria-pressed="true"]{border-color:var(--parcel);box-shadow:inset 0 0 0 1px var(--parcel)}
+.cand b{display:block;font-family:var(--f-code);font-size:12px;color:var(--parcel)}
+.cand span{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.filter{display:grid;grid-template-columns:repeat(3,1fr) auto;gap:8px;align-items:end}
+.filter label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}
+.filter input{height:40px;width:100%;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:0 10px;font-family:var(--f-code);text-transform:uppercase}
+.toggle{display:flex;align-items:center;gap:6px;height:40px;font-size:12.5px;color:var(--fg);white-space:nowrap;cursor:pointer}
+
+.units-meta{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:14px 0 8px;font-size:13px;color:var(--muted)}
+.units{display:flex;flex-direction:column;gap:8px}
+.unit{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.unit.match{border-color:var(--ok);box-shadow:inset 3px 0 0 var(--ok)}
+.unit.dim{opacity:.5}
+.unit .where{font-weight:700;font-size:15px}
+.unit .badge{align-self:start;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;background:var(--ok-soft);color:var(--ok)}
+.unit .facts{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--muted)}
+.unit .facts b{color:var(--fg);font-weight:600}
+.unit .rcs{grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.unit .rcs .mono{font-size:12.5px;word-break:break-all}
+.unit .acts{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+
+.empty{color:var(--muted);font-size:14px}
+.empty ol{padding-left:20px;margin:8px 0 0;display:flex;flex-direction:column;gap:4px}
+
+details.card summary{cursor:pointer;font-weight:700;list-style:none;display:flex;justify-content:space-between;align-items:center}
+details.card summary::-webkit-details-marker{display:none}
+details.card summary::after{content:"+";font-weight:400;color:var(--muted);font-size:20px}
+details[open].card summary::after{content:"–"}
+details .body{margin-top:10px;font-size:13.5px;display:flex;flex-direction:column;gap:10px}
+.bm{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:9px;border:2px dashed var(--ink);color:var(--ink);font-weight:700;text-decoration:none;align-self:flex-start}
+pre.code{margin:0;padding:10px;background:var(--sunk);border-radius:8px;font:11.5px/1.4 var(--f-code);overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+
+.recent{display:flex;gap:6px;flex-wrap:wrap}
+.recent button{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 10px;font-size:12.5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.toast{position:fixed;z-index:2000;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);opacity:0;background:var(--fg);color:var(--bg);padding:9px 14px;border-radius:9px;font-size:13.5px;font-weight:600;transition:.2s;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%)}
+
+.leaflet-container{font:inherit}
+.leaflet-control-attribution{font-size:10px}
+.pin{width:22px;height:22px;border-radius:50% 50% 50% 0;background:var(--ink);transform:rotate(-45deg);border:3px solid var(--surface);box-shadow:var(--shadow)}
+
+@media (min-width:900px){
+  .app{grid-template-columns:440px 1fr;grid-template-rows:auto 1fr;height:100%}
+  .top{grid-column:1;grid-row:1;position:static}
+  .panel{grid-column:1;grid-row:2;overflow-y:auto}
+  .map-wrap{grid-column:2;grid-row:1/3;height:auto;border-bottom:0;border-left:1px solid var(--line)}
+}
+@media (max-width:420px){ .filter{grid-template-columns:repeat(3,1fr)} .toggle{grid-column:1/-1} }
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><h1>Catastro <b>al punto</b></h1><span>De la dirección del cliente al inmueble exacto</span></div>
+    <form class="search" id="form" autocomplete="off">
+      <div class="field">
+        <input id="q" type="text" inputmode="search" enterkeyhint="search" aria-label="Dirección, coordenadas, enlace de Google Maps o referencia catastral"
+          placeholder="Calle Mayor 12, 3ºB, Cartagena">
+        <button type="button" class="clear" id="clear" aria-label="Borrar" hidden>×</button>
+      </div>
+      <button class="btn" id="go" type="submit">Buscar</button>
+    </form>
+    <p class="hint">Acepta dirección con piso, <code>37.60, -0.98</code>, un enlace largo de Google Maps o una referencia catastral.</p>
+  </header>
+
+  <div class="map-wrap">
+    <div id="map" role="application" aria-label="Mapa: toca un edificio para consultarlo"></div>
+    <div class="layers">
+      <button class="chip" id="lyr-sat" aria-pressed="false" type="button">Satélite</button>
+      <button class="chip" id="lyr-cat" aria-pressed="true" type="button">Parcelas</button>
+    </div>
+    <div class="map-tip" id="maptip">Toca el edificio correcto si el punto ha caído mal</div>
+  </div>
+
+  <main class="panel" id="panel">
+    <div class="status" id="status" data-kind="idle" role="status" aria-live="polite"><span class="dot"></span><div id="status-text">Busca una dirección o toca un edificio en el mapa.</div></div>
+
+    <section id="cands-wrap" hidden>
+      <p class="label">Parcelas a menos de 50 m</p>
+      <div class="cands" id="cands"></div>
+    </section>
+
+    <section class="card" id="parcel" hidden>
+      <div class="parcel-head">
+        <p class="label" style="margin:0">Parcela catastral</p>
+        <div class="rc-line"><span class="rc" id="rc14"></span><button class="copy" type="button" data-copy-from="rc14">Copiar</button></div>
+        <div class="addr" id="paddr"></div>
+      </div>
+      <dl class="compare" id="compare" hidden>
+        <dt>Cliente</dt><dd id="cmp-client"></dd>
+        <dt>Catastro</dt><dd id="cmp-cat"></dd>
+      </dl>
+      <div class="links" id="plinks"></div>
+
+      <div id="units-wrap" hidden>
+        <div class="units-meta"><span class="label" style="margin:0">Inmuebles en la parcela</span><span id="ucount"></span></div>
+        <div class="filter">
+          <label for="f-es">Escalera<input id="f-es" maxlength="3"></label>
+          <label for="f-pt">Planta<input id="f-pt" maxlength="4"></label>
+          <label for="f-pu">Puerta<input id="f-pu" maxlength="4"></label>
+          <label class="toggle" for="f-only"><input type="checkbox" id="f-only"> Solo coinciden</label>
+        </div>
+        <div class="units" id="units" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+    <section id="empty" class="card empty">
+      <p class="label">Cómo funciona</p>
+      Consulta los servicios oficiales del Catastro y te abre la ficha en la Sede Electrónica.
+      <ol>
+        <li>Escribe la dirección tal como te la da el cliente, con planta y puerta.</li>
+        <li>Revisa que el punto del mapa cae sobre el edificio. Si no, tócalo.</li>
+        <li>El piso que coincide aparece marcado en verde. Ábrelo en la Sede para confirmar.</li>
+      </ol>
+    </section>
+
+    <section id="recent-wrap" hidden>
+      <p class="label">Recientes</p>
+      <div class="recent" id="recent"></div>
+    </section>
+
+    <details class="card" id="bm-card">
+      <summary>Marcador para Google Maps</summary>
+      <div class="body">
+        <p style="margin:0">En el ordenador, arrastra este botón a la barra de marcadores. En Google Maps, haz clic en un edificio y pulsa el marcador: se abre aquí con ese punto.</p>
+        <a class="bm" id="bm" href="#">⌖ Catastro al punto</a>
+        <p style="margin:0;color:var(--muted)">En el móvil: guarda cualquier página como marcador, edítalo y pega este código como URL. Luego, desde Google Maps en el navegador, escribe el nombre del marcador en la barra de direcciones.</p>
+        <pre class="code" id="bm-code"></pre>
+        <button class="copy" type="button" id="bm-copy" style="align-self:flex-start">Copiar código</button>
+      </div>
+    </details>
+  </main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+"use strict";
+const API = "/api/catastro";
+const SEDE = "https://www1.sedecatastro.gob.es";
+const $ = (id) => document.getElementById(id);
+const els = { form:$("form"), q:$("q"), go:$("go"), clear:$("clear"), status:$("status"), stext:$("status-text"),
+  candsWrap:$("cands-wrap"), cands:$("cands"), parcel:$("parcel"), rc14:$("rc14"), paddr:$("paddr"),
+  compare:$("compare"), cmpClient:$("cmp-client"), cmpCat:$("cmp-cat"), plinks:$("plinks"),
+  unitsWrap:$("units-wrap"), units:$("units"), ucount:$("ucount"), fes:$("f-es"), fpt:$("f-pt"), fpu:$("f-pu"), fonly:$("f-only"),
+  empty:$("empty"), recentWrap:$("recent-wrap"), recent:$("recent") };
+
+/* ---------- utilidades ---------- */
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const all = (n, tag) => n ? Array.from(n.getElementsByTagNameNS("*", tag)) : [];
+const txt = (n, tag) => (all(n, tag)[0]?.textContent || "").trim();
+let toastT;
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),1800); }
+function status(kind, html){ els.status.dataset.kind = kind; els.stext.innerHTML = html; }
+async function copy(text){
+  try { await navigator.clipboard.writeText(text); toast("Copiado"); }
+  catch { const ta=document.createElement("textarea"); ta.value=text; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); toast("Copiado"); }catch{ toast("Selecciona y copia a mano"); } ta.remove(); }
+}
+const store = {
+  get(k, d){ try{ return JSON.parse(localStorage.getItem(k)) ?? d; }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} }
+};
+
+class CatError extends Error {}
+async function cat(op, params){
+  let r;
+  try { r = await fetch(API + "?" + new URLSearchParams({ op, ...params })); }
+  catch { throw new CatError("No hay conexión con el servidor de la herramienta."); }
+  const body = await r.text();
+  if (!r.ok){ let m; try{ m = JSON.parse(body).error; }catch{} throw new CatError(m || `Error ${r.status} al consultar el Catastro.`); }
+  const doc = new DOMParser().parseFromString(body, "text/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new CatError("El Catastro devolvió una respuesta ilegible.");
+  const err = all(doc, "err")[0];
+  if (err){ const e = new CatError(txt(err,"des") || "El Catastro no encontró datos."); e.code = txt(err,"cod"); throw e; }
+  return doc;
+}
+
+/* ---------- interpretación de la entrada ---------- */
+const RC_RE = /^[0-9A-Z]{14}([0-9A-Z]{6})?$/;
+function parseInput(raw){
+  const s = raw.trim();
+  const compact = s.toUpperCase().replace(/[\s-]/g, "");
+  if (RC_RE.test(compact) && /\d/.test(compact) && /[A-Z]/.test(compact)) return { type:"rc", rc: compact };
+  if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(s)) return { type:"short" };
+  let m = s.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || s.match(/[?&](?:q|query|ll|destination)=(-?\d+\.\d+)(?:,|%2C)\s*(-?\d+\.\d+)/i)
+       || s.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || s.match(/^\s*(-?\d{1,2}[.,]\d+)\s*[,;\s]\s*(-?\d{1,3}[.,]\d+)\s*$/);
+  if (m){
+    let a = +String(m[1]).replace(",", "."), b = +String(m[2]).replace(",", ".");
+    if (a < 10 && b > 25) [a, b] = [b, a];
+    return { type:"ll", lat:a, lng:b };
+  }
+  return { type:"addr", ...splitAddress(s) };
+}
+// Extrae escalera / planta / puerta del texto del cliente y deja una dirección limpia para geocodificar.
+function splitAddress(s){
+  const hint = { es:"", pt:"", pu:"" };
+  let rest = " " + s + " ";
+  const take = (re, fn) => { const m = rest.match(re); if (m){ fn(m); rest = rest.replace(m[0], " "); } };
+  take(/\besc(?:alera)?\.?\s*([A-Z0-9]{1,3})\b/i, (m) => hint.es = m[1]);
+  take(/\b(?:bajo|bj)\b\.?\s*([A-Z0-9]{1,2})?\b/i, (m) => { hint.pt = "0"; if (m[1]) hint.pu = m[1]; });
+  take(/(?:^|[\s,])[áaÁA]tico\.?\s*([A-Z0-9]{1,2})?(?=[\s,.]|$)/i, (m) => { hint.pt = "AT"; if (m[1]) hint.pu = m[1]; });
+  take(/\bentresuelo\b\.?\s*([A-Z0-9]{1,2})?\b/i, (m) => { hint.pt = "EN"; if (m[1]) hint.pu = m[1]; });
+  take(/\bplanta\s*(-?\d{1,2})\b/i, (m) => hint.pt = m[1]);
+  take(/\bpuerta\s*([A-Z0-9]{1,3})\b/i, (m) => hint.pu = m[1]);
+  if (!hint.pt) take(/[\s,]-?(\d{1,2})\s*[ºª°o]\s*-?\s*([A-Z]|\d{1,2})?(?=[\s,.]|$)/i, (m) => { hint.pt = m[1]; if (m[2]) hint.pu = m[2]; });
+  if (!hint.pt) take(/,\s*(\d{1,2})\s*-?\s*([A-Z])\s*(?=,|$)/i, (m) => { hint.pt = m[1]; hint.pu = m[2]; });
+  const clean = rest.replace(/\s+,/g, ",").replace(/,(\s*,)+/g, ",").replace(/\s{2,}/g, " ").replace(/^[\s,]+|[\s,]+$/g, "");
+  return { query: clean, hint, raw: s.trim() };
+}
+
+/* ---------- normalización de planta / puerta ---------- */
+const key = (v) => {
+  let s = String(v ?? "").toUpperCase().trim();
+  if (!s) return "";
+  if (/^(0+|BJ|BA|BAJO|PB)$/.test(s)) return "0";
+  if (/^-?\d+$/.test(s)) return String(parseInt(s, 10));
+  return s.replace(/^0+(?=[A-Z0-9])/, "");
+};
+function plantaLabel(pt){
+  const k = key(pt);
+  if (!k) return "";
+  if (k === "0") return "Bajo";
+  if (k === "AT") return "Ático"; if (k === "EN") return "Entresuelo"; if (k === "SM") return "Semisótano";
+  if (/^-\d+$/.test(k)) return `Sótano ${k.slice(1)}`;
+  if (/^\d+$/.test(k)) return `Planta ${k}ª`;
+  return `Planta ${pt}`;
+}
+const USOS = { V:"Residencial", A:"Almacén / aparcamiento", C:"Comercial", I:"Industrial", O:"Oficinas", K:"Deportivo", T:"Espectáculos", G:"Ocio y hostelería", Y:"Sanidad", E:"Cultural", R:"Religioso", M:"Suelo sin edificar", P:"Edificio singular", B:"Almacén agrario", J:"Industrial agrario", Z:"Agrario" };
+
+/* ---------- mapa ---------- */
+const map = L.map("map", { zoomControl:true, attributionControl:true }).setView([40.2, -3.7], 6);
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:20, maxNativeZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
+const pnoa = L.tileLayer.wms("https://www.ign.es/wms-inspire/pnoa-ma", { layers:"OI.OrthoimageCoverage", format:"image/jpeg", maxZoom:20, attribution:"PNOA © IGN" });
+const catLayer = L.tileLayer.wms("https://ovc.catastro.meh.es/Cartografia/WMS/ServidorWMS.aspx", {
+  layers:"Catastro", format:"image/png", transparent:true, maxZoom:20, minZoom:15, attribution:"© Dirección General del Catastro" }).addTo(map);
+const pinIcon = L.divIcon({ className:"", html:'<div class="pin"></div>', iconSize:[22,22], iconAnchor:[11,22] });
+let marker = null, parcelPoly = null;
+
+$("lyr-sat").onclick = (e) => { const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", on); if (on){ map.addLayer(pnoa); map.removeLayer(osm); } else { map.addLayer(osm); map.removeLayer(pnoa); } catLayer.bringToFront(); };
+$("lyr-cat").onclick = (e) => { const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", on); on ? map.addLayer(catLayer) : map.removeLayer(catLayer); };
+
+function placeMarker(lat, lng, zoom = 19){
+  if (!marker){
+    marker = L.marker([lat, lng], { icon:pinIcon, draggable:true, keyboard:true, title:"Punto consultado" }).addTo(map);
+    marker.on("dragend", () => { const p = marker.getLatLng(); lookupPoint(p.lat, p.lng, { keepHint:true }); });
+  } else marker.setLatLng([lat, lng]);
+  map.setView([lat, lng], Math.max(map.getZoom(), zoom));
+}
+map.on("click", (e) => lookupPoint(e.latlng.lat, e.latlng.lng, { keepHint:true }));
+
+/* ---------- estado ---------- */
+let state = { hint:{ es:"", pt:"", pu:"" }, clientAddr:"", units:[], rc14:"", busy:false, ll:null };
+function setHint(h){ state.hint = h; els.fes.value = h.es || ""; els.fpt.value = h.pt === "0" ? "Bajo" : (h.pt || ""); els.fpu.value = h.pu || ""; }
+function busy(b){ state.busy = b; els.go.disabled = b; els.go.textContent = b ? "Buscando…" : "Buscar"; }
+
+/* ---------- flujo principal ---------- */
+els.form.addEventListener("submit", (e) => { e.preventDefault(); run(els.q.value); });
+els.q.addEventListener("input", () => els.clear.hidden = !els.q.value);
+els.clear.onclick = () => { els.q.value = ""; els.clear.hidden = true; els.q.focus(); };
+
+async function run(raw){
+  if (!raw.trim() || state.busy) return;
+  const p = parseInput(raw);
+  els.empty.hidden = true;
+  if (p.type === "short"){
+    status("warn", "Los enlaces cortos de Google Maps (<span class='mono'>maps.app.goo.gl</span>) no llevan coordenadas. Ábrelo, mantén pulsado sobre el edificio y copia las coordenadas que aparecen.");
+    return;
+  }
+  busy(true);
+  try {
+    if (p.type === "rc"){
+      setHint({ es:"", pt:"", pu:"" }); state.clientAddr = "";
+      await lookupRC(p.rc);
+    } else if (p.type === "ll"){
+      if (!inSpain(p.lat, p.lng)) throw new CatError("Esas coordenadas no están en España.");
+      setHint({ es:"", pt:"", pu:"" }); state.clientAddr = "";
+      await lookupPoint(p.lat, p.lng, { keepHint:true, internal:true });
+    } else {
+      setHint(p.hint); state.clientAddr = p.raw;
+      await lookupAddress(p);
+    }
+    remember(raw);
+  } catch (e){
+    status("bad", esc(e.message || "Algo ha fallado."));
+  } finally { busy(false); }
+}
+const inSpain = (lat, lng) => lat > 27 && lat < 44.5 && lng > -19 && lng < 5;
+
+async function lookupAddress(p){
+  status("load", "Localizando la dirección…");
+  const url = "https://nominatim.openstreetmap.org/search?" + new URLSearchParams({ format:"jsonv2", countrycodes:"es", limit:"5", addressdetails:"1", "accept-language":"es", q:p.query });
+  let res;
+  try { res = await (await fetch(url, { headers:{ Accept:"application/json" } })).json(); }
+  catch { throw new CatError("No se pudo localizar la dirección. Prueba a pegar las coordenadas de Google Maps."); }
+  if (!res.length) throw new CatError("No encuentro esa dirección. Añade el municipio, o pega las coordenadas de Google Maps.");
+  const best = res.find(r => r.address?.house_number) || res[0];
+  const lat = +best.lat, lng = +best.lon;
+  const noNumber = !best.address?.house_number;
+  await lookupPoint(lat, lng, { keepHint:true, internal:true, approx:noNumber });
+}
+
+async function lookupRC(rc){
+  status("load", "Buscando la referencia en el Catastro…");
+  const rc14 = rc.slice(0, 14);
+  try {
+    const d = await cat("cpmrc", { rc: rc14 });
+    const lat = +txt(d, "ycen"), lng = +txt(d, "xcen");
+    if (lat && lng){ placeMarker(lat, lng); state.ll = { lat, lng }; }
+  } catch { /* sin coordenadas: seguimos con los datos */ }
+  hideCands();
+  await loadParcel(rc14, "", rc.length === 20 ? rc : "");
+}
+
+async function lookupPoint(lat, lng, opts = {}){
+  const own = !opts.internal;
+  if (own){ if (state.busy) return; busy(true); }
+  placeMarker(lat, lng); state.ll = { lat, lng };
+  status("load", "Consultando qué parcela hay en ese punto…");
+  try {
+    let found = null;
+    try {
+      const d = await cat("rccoor", { lat, lng });
+      const coord = all(d, "coord")[0];
+      if (coord) found = { rc14: txt(coord,"pc1") + txt(coord,"pc2"), ldt: txt(coord,"ldt") };
+    } catch (e) { if (!(e instanceof CatError) || e.message.includes("conexión")) throw e; }
+
+    const cands = await nearby(lat, lng);
+    if (!found && !cands.length) throw new CatError("No hay ninguna parcela catastral en ese punto ni a 50 m. Toca el edificio en el mapa.");
+    const chosen = found || cands[0];
+    renderCands(cands, chosen.rc14);
+    await loadParcel(chosen.rc14, chosen.ldt, "", { approx: opts.approx || !found });
+  } catch (e){ status("bad", esc(e.message)); }
+  finally { if (own) busy(false); }
+}
+
+async function nearby(lat, lng){
+  try {
+    const d = await cat("rccoordist", { lat, lng });
+    const seen = new Set();
+    return all(d, "pcd").map(n => ({ rc14: txt(n,"pc1") + txt(n,"pc2"), ldt: txt(n,"ldt"), dis: parseFloat(txt(n,"dis")) }))
+      .filter(c => c.rc14.length === 14 && !seen.has(c.rc14) && seen.add(c.rc14))
+      .sort((a, b) => (a.dis || 0) - (b.dis || 0)).slice(0, 8);
+  } catch { return []; }
+}
+function hideCands(){ els.candsWrap.hidden = true; els.cands.innerHTML = ""; }
+function renderCands(list, active){
+  if (list.length < 2){ hideCands(); return; }
+  els.candsWrap.hidden = false;
+  els.cands.innerHTML = list.map(c => `<button type="button" class="cand" data-rc="${esc(c.rc14)}" aria-pressed="${c.rc14 === active}">
+    <b>${esc(c.rc14)}</b><span>${esc(shortAddr(c.ldt) || "Sin dirección")}${isFinite(c.dis) ? " · " + Math.round(c.dis) + " m" : ""}</span></button>`).join("");
+  els.cands.querySelectorAll(".cand").forEach(b => b.onclick = async () => {
+    if (state.busy) return;
+    els.cands.querySelectorAll(".cand").forEach(x => x.setAttribute("aria-pressed", x === b));
+    busy(true);
+    try { await loadParcel(b.dataset.rc, list.find(c => c.rc14 === b.dataset.rc)?.ldt || ""); }
+    catch (e){ status("bad", esc(e.message)); } finally { busy(false); }
+  });
+}
+const shortAddr = (s) => String(s || "").replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+/g, " ").trim();
+
+async function loadParcel(rc14, ldt, rc20 = "", opts = {}){
+  status("load", "Leyendo los inmuebles de la parcela…");
+  state.rc14 = rc14;
+  els.parcel.hidden = false; els.empty.hidden = true;
+  els.rc14.textContent = rc14;
+  els.paddr.textContent = shortAddr(ldt) || "—";
+  drawParcel(rc14);
+
+  let units = [];
+  try {
+    const d = await cat("dnprc", { rc: rc20 || rc14 });
+    const nodes = all(d, "rcdnp").length ? all(d, "rcdnp") : all(d, "bi");
+    units = nodes.map(parseUnit).filter(u => u.rc20.length >= 18);
+  } catch (e){
+    if (e.message.includes("conexión")) throw e;
+  }
+  state.units = units;
+  if (units[0] && !ldt) els.paddr.textContent = units[0].street || "—";
+  renderCompare(units[0]?.street || shortAddr(ldt));
+  renderLinks(rc14, units[0]);
+  renderUnits();
+
+  const m = matches();
+  const n = units.length;
+  const where = opts.approx ? " El punto es aproximado: confirma en el mapa que es el edificio." : "";
+  if (!n) status("warn", "He encontrado la parcela pero el Catastro no devuelve inmuebles. Ábrela en la Sede para verla." + where);
+  else if (hasHint() && m.length === 1) status("ok", `Coincide 1 inmueble con lo que dijo el cliente: <b>${esc(m[0].label)}</b>.${where}`);
+  else if (hasHint() && m.length > 1) status("warn", `${m.length} inmuebles encajan con el filtro. Afina planta o puerta.${where}`);
+  else if (hasHint()) status("warn", `Ningún inmueble de esta parcela coincide con ${esc(hintText())}. Puede que el punto esté en el edificio de al lado: prueba con las parcelas cercanas.${where}`);
+  else status("ok", `Parcela con ${n} inmueble${n === 1 ? "" : "s"}. Indica planta y puerta para marcar el piso.${where}`);
+}
+
+function parseUnit(n){
+  const rcN = all(n, "rc")[0];
+  const rc20 = ["pc1","pc2","car","cc1","cc2"].map(k => txt(rcN, k)).join("");
+  const es = txt(n,"es"), pt = txt(n,"pt"), pu = txt(n,"pu"), bq = txt(n,"bq");
+  const tv = txt(n,"tv"), nv = txt(n,"nv"), pnp = txt(n,"pnp");
+  const street = [tv, nv].filter(Boolean).join(" ") + (pnp ? " " + parseInt(pnp, 10) : "") + (txt(n,"nm") ? ", " + txt(n,"nm") : "");
+  const usoRaw = txt(n,"luso");
+  const parts = [bq && `Bloque ${bq}`, es && `Esc. ${es}`, pt && plantaLabel(pt), pu && `Puerta ${pu}`].filter(Boolean);
+  return { rc20, es, pt, pu, bq, street: street.trim(), uso: USOS[usoRaw] || usoRaw, sfc: txt(n,"sfc"), ant: txt(n,"ant"),
+    cpt: txt(n,"cpt"), ldt: txt(n,"ldt"), del: txt(n,"cp"), mun: txt(n,"cmc") || txt(n,"cm"),
+    label: parts.join(" · ") || "Inmueble único" };
+}
+
+/* ---------- filtro ---------- */
+const hasHint = () => !!(state.hint.es || state.hint.pt || state.hint.pu);
+const hintText = () => [state.hint.es && "esc. " + state.hint.es, state.hint.pt && plantaLabel(state.hint.pt).toLowerCase(), state.hint.pu && "puerta " + state.hint.pu].filter(Boolean).join(", ");
+const isMatch = (u) => (!state.hint.es || key(u.es) === key(state.hint.es)) && (!state.hint.pt || key(u.pt) === key(state.hint.pt)) && (!state.hint.pu || key(u.pu) === key(state.hint.pu));
+const matches = () => hasHint() ? state.units.filter(isMatch) : [];
+[els.fes, els.fpt, els.fpu].forEach(i => i.addEventListener("input", () => {
+  state.hint = { es: els.fes.value.trim(), pt: els.fpt.value.trim(), pu: els.fpu.value.trim() };
+  renderUnits();
+}));
+els.fonly.addEventListener("change", renderUnits);
+
+function sortKey(u){
+  const p = key(u.pt);
+  const pn = p === "0" ? 0 : /^-?\d+$/.test(p) ? +p : p === "EN" ? 0.5 : p === "AT" ? 99 : 50;
+  return [u.bq, u.es, String(pn + 100).padStart(6, "0"), key(u.pu).padStart(4, "0")].join("|");
+}
+function renderUnits(){
+  const list = [...state.units].sort((a, b) => sortKey(a) < sortKey(b) ? -1 : 1);
+  els.unitsWrap.hidden = !list.length;
+  const hint = hasHint();
+  const shown = hint && els.fonly.checked ? list.filter(isMatch) : list;
+  const nm = hint ? list.filter(isMatch).length : 0;
+  els.ucount.textContent = hint ? `${nm} de ${list.length} coinciden` : `${list.length} en total`;
+  // las coincidencias primero
+  if (hint) shown.sort((a, b) => isMatch(b) - isMatch(a));
+  els.units.innerHTML = shown.map(u => {
+    const m = hint && isMatch(u);
+    return `<article class="unit ${m ? "match" : hint ? "dim" : ""}">
+      <div class="where">${esc(u.label)}</div>${m ? '<span class="badge">Coincide</span>' : "<span></span>"}
+      <div class="facts">${u.uso ? `<span><b>${esc(u.uso)}</b></span>` : ""}${u.sfc ? `<span><b>${esc(u.sfc)}</b> m² construidos</span>` : ""}${u.ant ? `<span>Año <b>${esc(u.ant)}</b></span>` : ""}${u.cpt ? `<span>Particip. <b>${esc(u.cpt)}%</b></span>` : ""}</div>
+      <div class="rcs"><span class="mono">${esc(u.rc20)}</span><button type="button" class="copy" data-copy="${esc(u.rc20)}">Copiar</button></div>
+      <div class="acts"><a class="link ${m ? "primary" : ""}" target="_blank" rel="noopener" href="${esc(fichaURL(u))}">${ICON.ext}Ficha en la Sede</a></div>
+    </article>`;
+  }).join("") || `<p class="empty">Ningún inmueble coincide. Quita el filtro o revisa la parcela.</p>`;
+}
+
+/* ---------- enlaces oficiales ---------- */
+const ICON = {
+  ext:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+  map:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14"/></svg>',
+  pin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>'
+};
+function fichaURL(u){
+  const q = new URLSearchParams({ UrbRus:"U", RefC:u.rc20, from:"OVCBusqueda" });
+  if (u.del) q.set("del", u.del); if (u.mun) q.set("mun", u.mun);
+  return `${SEDE}/CYCBienInmueble/OVCConCiud.aspx?${q}`;
+}
+function renderLinks(rc14, u){
+  const lista = new URLSearchParams({ rc1: rc14.slice(0, 7), rc2: rc14.slice(7) });
+  if (u?.del) lista.set("del", u.del); if (u?.mun) lista.set("mun", u.mun);
+  const ll = state.ll;
+  els.plinks.innerHTML = `
+    <a class="link primary" target="_blank" rel="noopener" href="${SEDE}/Cartografia/mapa.aspx?refcat=${esc(rc14)}">${ICON.map}Ver en el visor oficial</a>
+    <a class="link" target="_blank" rel="noopener" href="${SEDE}/CYCBienInmueble/OVCListaBienes.aspx?${esc(lista)}">${ICON.ext}Lista en la Sede</a>
+    ${ll ? `<a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${ll.lat.toFixed(6)},${ll.lng.toFixed(6)}">${ICON.pin}Google Maps</a>` : ""}
+    <a class="link" target="_blank" rel="noopener" href="${SEDE}/CYCBienInmueble/OVCBusqueda.aspx">Buscador oficial</a>`;
+}
+function renderCompare(catAddr){
+  if (!state.clientAddr){ els.compare.hidden = true; return; }
+  els.compare.hidden = false;
+  els.cmpClient.textContent = state.clientAddr;
+  els.cmpCat.textContent = catAddr || "—";
+}
+
+/* ---------- polígono de la parcela ---------- */
+async function drawParcel(rc14){
+  if (parcelPoly){ map.removeLayer(parcelPoly); parcelPoly = null; }
+  try {
+    const d = await cat("parcel", { rc: rc14 });
+    if (state.rc14 !== rc14) return;
+    const rings = all(d, "posList").map(pl => {
+      const n = pl.textContent.trim().split(/\s+/).map(Number);
+      const pts = [];
+      for (let i = 0; i + 1 < n.length; i += 2){
+        let a = n[i], b = n[i + 1];
+        if (!(a > 27 && a < 44.5)) [a, b] = [b, a];
+        pts.push([a, b]);
+      }
+      return pts;
+    }).filter(r => r.length > 2);
+    if (!rings.length) return;
+    const color = getComputedStyle(document.documentElement).getPropertyValue("--parcel").trim() || "#c2187a";
+    parcelPoly = L.polygon(rings, { color, weight:3, fillColor:color, fillOpacity:.14 }).addTo(map);
+    map.fitBounds(parcelPoly.getBounds(), { maxZoom:20, padding:[30, 30] });
+  } catch { /* opcional: la capa WMS ya muestra los linderos */ }
+}
+
+/* ---------- copiar, recientes, marcador ---------- */
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-copy],[data-copy-from]");
+  if (!b) return;
+  copy(b.dataset.copy || $(b.dataset.copyFrom).textContent.trim());
+});
+function remember(q){
+  const list = [q.trim(), ...store.get("cap-recent", []).filter(x => x !== q.trim())].slice(0, 6);
+  store.set("cap-recent", list); renderRecent();
+}
+function renderRecent(){
+  const list = store.get("cap-recent", []);
+  els.recentWrap.hidden = !list.length;
+  els.recent.innerHTML = list.map(x => `<button type="button" title="${esc(x)}">${esc(x)}</button>`).join("");
+  els.recent.querySelectorAll("button").forEach((b, i) => b.onclick = () => { els.q.value = list[i]; els.clear.hidden = false; run(list[i]); });
+}
+const BM = `javascript:(function(){var u=location.href,m=u.match(/!3d(-?\\d+\\.\\d+)!4d(-?\\d+\\.\\d+)/)||u.match(/@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)/);if(!m){alert('Abre un lugar o edificio en Google Maps primero');return}window.open('${location.origin}${location.pathname}?ll='+m[1]+','+m[2],'_blank')})()`;
+$("bm").href = BM; $("bm-code").textContent = BM;
+$("bm").addEventListener("click", (e) => { e.preventDefault(); toast("Arrástralo a la barra de marcadores"); });
+$("bm-copy").onclick = () => copy(BM);
+
+/* ---------- arranque ---------- */
+renderRecent();
+const params = new URLSearchParams(location.search);
+const start = params.get("ll") || params.get("q") || params.get("text") || params.get("url");
+if (start){ els.q.value = start; els.clear.hidden = false; run(start); }
+window.__cap = { parseInput, splitAddress, parseUnit, key, plantaLabel }; // para pruebas
+})();
+</script>
+</body>
+</html>
