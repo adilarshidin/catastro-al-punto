@@ -8,7 +8,7 @@ Pensado para el personal de la agencia, sin conocimientos técnicos: cada dato v
 
 1. **¿Dónde está la vivienda?** Hay dos formas:
    - **Escribir la dirección**: calle, número y municipio por separado. Al escribir la calle aparecen sugerencias de portales reales (CartoCiudad, IGN); al elegir una se rellenan número y municipio.
-   - **Pegar enlace de Google Maps**: vale el enlace corto que da el botón Compartir (`maps.app.goo.gl/…`), un enlace largo o unas coordenadas (`37.6052, -0.9864`).
+   - **Pegar enlace de mapa**: vale el enlace corto de Google Maps que da el botón Compartir (`maps.app.goo.gl/…`), un enlace largo, el enlace de Compartir de Waze (`waze.com/ul/h…` o `waze.com/ul?ll=…`, se lee en el navegador sin llamar a Waze) o unas coordenadas (`37.6052, -0.9864`).
    - El enlace «Ya tengo la referencia catastral» permite buscar por referencia de 14 o 20 caracteres.
 2. **¿Qué piso es?** Escalera, planta y puerta (opcionales). Se entiende «3º», «Bajo», «Ático», «izquierda», etc.
 3. **Buscar la vivienda.** El piso que coincide sale en verde con su dirección completa (calle, número, escalera, planta, puerta, código postal y municipio) y su referencia catastral, con botones para copiar cada una.

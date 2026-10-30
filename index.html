@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Catastro al Punto</title>
-<meta name="description" content="Encuentra la dirección exacta y la referencia catastral de un piso a partir de su dirección o de un enlace de Google Maps, y ábrelo en la Sede del Catastro.">
+<meta name="description" content="Encuentra la dirección exacta y la referencia catastral de un piso a partir de su dirección o de un enlace de Google Maps o Waze, y ábrelo en la Sede del Catastro.">
 <meta name="theme-color" content="#f3f5f8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f141b" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -182,7 +182,7 @@ button,input{font:inherit;color:inherit}
         <h2 class="step"><span class="n">1</span>¿Dónde está la vivienda?</h2>
         <div class="modes" role="tablist" aria-label="Cómo indicar la vivienda">
           <button type="button" role="tab" id="tab-addr" data-mode="addr" aria-selected="true" aria-controls="m-addr">Escribir la dirección</button>
-          <button type="button" role="tab" id="tab-link" data-mode="link" aria-selected="false" aria-controls="m-link">Pegar enlace de Google Maps</button>
+          <button type="button" role="tab" id="tab-link" data-mode="link" aria-selected="false" aria-controls="m-link">Pegar enlace de mapa</button>
         </div>
 
         <div class="pane" id="m-addr" role="tabpanel" aria-labelledby="tab-addr">
@@ -201,8 +201,8 @@ button,input{font:inherit;color:inherit}
         </div>
 
         <div class="pane" id="m-link" role="tabpanel" aria-labelledby="tab-link" hidden>
-          <label class="f">Enlace de Google Maps<input id="l-url" type="text" inputmode="url" placeholder="https://maps.app.goo.gl/…" enterkeyhint="search"></label>
-          <p class="help">En Google Maps toca el edificio, pulsa <b>Compartir</b> y luego <b>Copiar enlace</b>. Pégalo aquí. También sirven unas coordenadas, como <span class="mono">37.60, -0.98</span>.</p>
+          <label class="f">Enlace de Google Maps o Waze<input id="l-url" type="text" inputmode="url" placeholder="https://maps.app.goo.gl/…" enterkeyhint="search"></label>
+          <p class="help">En Google Maps toca el edificio, pulsa <b>Compartir</b> y luego <b>Copiar enlace</b>. En Waze, toca el punto y pulsa <b>Compartir</b>. Pégalo aquí. También sirven unas coordenadas, como <span class="mono">37.60, -0.98</span>.</p>
         </div>
 
         <div class="pane" id="m-rc" role="tabpanel" hidden>
@@ -254,7 +254,7 @@ button,input{font:inherit;color:inherit}
         <p class="label">Cómo funciona</p>
         Consulta los servicios oficiales del Catastro.
         <ol>
-          <li>Escribe la calle, el número y el municipio, o pega el enlace de Google Maps que te ha pasado el cliente.</li>
+          <li>Escribe la calle, el número y el municipio, o pega el enlace de Google Maps o Waze que te ha pasado el cliente.</li>
           <li>Indica escalera, planta y puerta si las sabes.</li>
           <li>Pulsa «Buscar la vivienda». El piso que coincide sale en verde con su dirección completa y su referencia catastral.</li>
         </ol>
@@ -354,11 +354,29 @@ function prettyLdt(s){
 /* ---------- interpretación de lo pegado ---------- */
 const RC_RE = /^[0-9A-Z]{14}([0-9A-Z]{6})?$/;
 const SHORT_RE = /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps)\//i;
+// Enlace de Compartir de Waze: waze.com/ul/h + geohash. Con menos de 8 caracteres la celda pasa de ~20 m y no sirve para un portal.
+const WAZE_RE = /waze\.com\/ul\/h([0-9b-hjkmnp-z]{8,})/i;
+function geohash(h){
+  const B32 = "0123456789bcdefghjkmnpqrstuvwxyz", lat = [-90, 90], lng = [-180, 180];
+  let even = true;
+  for (const c of h.toLowerCase()){
+    const v = B32.indexOf(c);
+    for (let bit = 4; bit >= 0; bit--){
+      const r = even ? lng : lat;
+      r[(v >> bit) & 1 ? 0 : 1] = (r[0] + r[1]) / 2;
+      even = !even;
+    }
+  }
+  return { lat:(lat[0] + lat[1]) / 2, lng:(lng[0] + lng[1]) / 2 };
+}
 function parseInput(raw){
   const s = raw.trim();
   const compact = s.toUpperCase().replace(/[\s-]/g, "");
   if (RC_RE.test(compact) && /\d/.test(compact) && /[A-Z]/.test(compact)) return { type:"rc", rc: compact };
+  const w = s.match(WAZE_RE);
+  if (w) return { type:"ll", ...geohash(w[1]) };
   let m = s.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || s.match(/[?&](?:q|query|ll|destination)=(-?\d+\.\d+)(?:,|%2C)\s*(-?\d+\.\d+)/i)
+       || s.match(/[?&](?:to|from)=ll\.(-?\d+\.\d+)(?:,|%2C)(-?\d+\.\d+)/i)
        || s.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || s.match(/^\s*(-?\d{1,2}[.,]\d+)\s*[,;\s]\s*(-?\d{1,3}[.,]\d+)\s*$/);
   if (m){
     let a = +String(m[1]).replace(",", "."), b = +String(m[2]).replace(",", ".");
@@ -591,7 +609,7 @@ async function search(req){
   const missing = req.mode === "addr" ? (!req.street && els.street) || (!req.town && !state.pre && els.town)
     : req.mode === "link" ? !req.text && els.url : !req.rc && els.rcIn;
   if (missing){
-    status("warn", missing === els.town ? "Falta el municipio." : missing === els.street ? "Falta la calle." : missing === els.url ? "Pega primero el enlace de Google Maps." : "Escribe la referencia catastral.");
+    status("warn", missing === els.town ? "Falta el municipio." : missing === els.street ? "Falta la calle." : missing === els.url ? "Pega primero el enlace de Google Maps o Waze." : "Escribe la referencia catastral.");
     missing.focus(); return;
   }
   readHint();
@@ -624,7 +642,7 @@ async function searchLink(text){
     s = await expandLink(url);
   } else if (url) s = url;
   const p = parseInput(s);
-  if (p.type === "nolink") throw new CatError("Ese enlace no lleva la ubicación. En Google Maps toca el edificio, pulsa Compartir y copia el enlace otra vez.");
+  if (p.type === "nolink") throw new CatError("Ese enlace no lleva la ubicación. En Google Maps o Waze toca el edificio, pulsa Compartir y copia el enlace otra vez.");
   if (p.type === "rc") return lookupRC(p.rc);
   if (p.type === "ll"){
     if (!inSpain(p.lat, p.lng)) throw new CatError("Ese punto no está en España.");
@@ -664,8 +682,8 @@ async function goAddress(query, num){
   const url = "https://nominatim.openstreetmap.org/search?" + new URLSearchParams({ format:"jsonv2", countrycodes:"es", limit:"5", addressdetails:"1", "accept-language":"es", q:query });
   let res;
   try { res = await (await fetch(url, { headers:{ Accept:"application/json" } })).json(); }
-  catch { throw new CatError("No se pudo localizar la dirección. Prueba con el enlace de Google Maps."); }
-  if (!res.length) throw new CatError("No encuentro esa dirección. Revisa la calle y el municipio, o usa el enlace de Google Maps.");
+  catch { throw new CatError("No se pudo localizar la dirección. Prueba con un enlace de Google Maps o Waze."); }
+  if (!res.length) throw new CatError("No encuentro esa dirección. Revisa la calle y el municipio, o usa un enlace de Google Maps o Waze.");
   const best = res.find(r => r.address?.house_number) || res[0];
   await lookupPoint(+best.lat, +best.lon, { internal:true, approx:!best.address?.house_number });
 }
@@ -677,7 +695,7 @@ async function pointOf(c){
       lat = +f.lat; lng = +f.lng;
     } catch {}
   }
-  if (!lat || !lng) throw new CatError("No se pudo situar esa dirección en el mapa. Prueba con el enlace de Google Maps.");
+  if (!lat || !lng) throw new CatError("No se pudo situar esa dirección en el mapa. Prueba con un enlace de Google Maps o Waze.");
   return { lat, lng, rc: c.refCatastral || "" };
 }
 const goPoint = (pt) => lookupPoint(pt.lat, pt.lng, { internal:true, rc:pt.rc });
